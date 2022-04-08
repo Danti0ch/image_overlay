@@ -7,7 +7,7 @@
 #include <smmintrin.h>
 #include <string.h>
 
-#pragma GCC optimize("Ofast")
+//#pragma GCC optimize("Ofast")
 //#pragma GCC target("avx, avx2, fma")
 
 using namespace sf;
@@ -15,26 +15,18 @@ using namespace sf;
 #define max(a, b) (a) > (b) ? (a) : (b)
 #define min(a, b) (b) > (a) ? (a) : (b)
 
-const char I = 255u,
-           Z = 0x80u,
-           meow1 =  0x00,
-           meow2 =  0x08;
-
-const __m128i   _0 =                  _mm_set_epi8 (0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0);
-const __m128i _255 =                  _mm_set_epi8 (I,I,I,I, I,I,I,I, I,I,I,I, I,I,I,I);
+const __m128i   _0 = _mm_setr_epi8 (0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0);
+const __m128i _255 = _mm_setr_epi8 (I,0,I,0, I,0,I,0, I,0,I,0, I,0,I,0);
 
 //----------------------LOCAL-FUNCTIONS-DECLARATION-----------------------//
 
 void fill_img(Uint8* arr, Image* img, Vector2u* arr_size, uint x_pos, uint y_pos);
 void draw_fps(RenderTexture* window, uint framerate, uint max_framerate, uint  min_framerate);
-void draw_bg(Vertex* pixels, Vertex* bg_pixels, Vector2u* bg_img_size);
-void draw_front(Vertex* pixels, Vertex* bg_pixels, Vertex* front_pixels, Vector2u bg_img_size, Vector2u front_img_size, uint x0, uint y0);
-void set_bg_arr(Uint8* dest, Uint8* src, Vector2u* size);
 void update_pixels(Uint8* dest, Uint8* bg_pixels, Uint8* front_pixels, Vector2u* size, bool is_overlaying);
 void update_pixels_simd(Uint8* dest, Uint8* bg_pixels, Uint8* front_pixels, Vector2u* size, bool is_overlaying);
+
 //----------------------PUBLIC-FUNCTIONS-DEFINITIONS----------------------//
 
-// TODO: запилить simd часть
 // TODO: рефактор
 
 int InitOverlaying(const char* bg_img_name, const char* front_img_name){
@@ -65,7 +57,7 @@ int InitOverlaying(const char* bg_img_name, const char* front_img_name){
     Uint8* front_pixels = (Uint8*)calloc(bg_img_size.x * bg_img_size.y << 2, sizeof(Uint8));
 
     fill_img(bg_pixels, &bg_img, &bg_img_size, 0, 0);
-    fill_img(front_pixels, &front_img, &bg_img_size, 300, 250);
+    fill_img(front_pixels, &front_img, &bg_img_size, FRONT_X0, FRONT_Y0);
 
     sf::RenderTexture texture_to_draw;
     texture_to_draw.create(bg_img_size.x, bg_img_size.y);
@@ -84,7 +76,8 @@ int InitOverlaying(const char* bg_img_name, const char* front_img_name){
     
     uint cur_framerate      = 0;
     bool is_overlaying      = false;
-
+    bool is_simd            = false;
+    
     clock_t init_time = clock();
 
     while (window.isOpen()){
@@ -100,10 +93,19 @@ int InitOverlaying(const char* bg_img_name, const char* front_img_name){
                 else if(Keyboard::isKeyPressed(Keyboard::E)){
                     is_overlaying = false;
                 }
+                else if(Keyboard::isKeyPressed(Keyboard::W)){
+                    is_simd = true;
+                }
+                else if(Keyboard::isKeyPressed(Keyboard::S)){
+                    is_simd = false;
+                }
             }
         }
     
-        update_pixels_simd(pixels, bg_pixels, front_pixels, &bg_img_size, is_overlaying);
+        if(is_simd)
+            update_pixels_simd(pixels, bg_pixels, front_pixels, &bg_img_size, is_overlaying);
+        else
+            update_pixels(pixels, bg_pixels, front_pixels, &bg_img_size, is_overlaying);
 
         //clock_t end_time = clock();
         framerate_counter++;
@@ -117,6 +119,7 @@ int InitOverlaying(const char* bg_img_name, const char* front_img_name){
             printf("cur: %u\nmax: %u\n===================\n", cur_framerate, max_framerate);
         }
         
+        texture_to_draw.clear(sf::Color::White);
         img_texture.update(pixels);
         img_sprite.setTexture(img_texture);
         texture_to_draw.draw(img_sprite);
@@ -124,8 +127,6 @@ int InitOverlaying(const char* bg_img_name, const char* front_img_name){
         //draw_fps(&texture_to_draw, cur_framerate, max_framerate, min_framerate);
 
         texture_to_draw.display();
-
-        window.clear();
 
         sf::Sprite sprite(texture_to_draw.getTexture());
         window.draw(sprite);
@@ -164,24 +165,6 @@ void draw_fps(RenderTexture* window, uint framerate, uint max_framerate, uint  m
 }
 //--------------------------------------------//
 
-void draw_bg(Vertex* pixels, Vertex* bg_pixels, Vector2u* bg_img_size){
-    
-    assert(pixels != NULL);
-    assert(bg_pixels != NULL);
-    
-    int maxY = bg_img_size->y;
-    int maxX = bg_img_size->x;
-
-    for(int y = 0; y < maxY; y++){
-        for(int x = 0; x < maxX; x++){
-            pixels[y * maxX + x].color = bg_pixels[y * maxX + x].color;
-        }
-    }
-
-    return;
-}
-//--------------------------------------------//
-
 void fill_img(Uint8* arr, Image* img, Vector2u* arr_size, uint x_pos, uint y_pos){
 
     assert(arr != NULL);
@@ -198,18 +181,6 @@ void fill_img(Uint8* arr, Image* img, Vector2u* arr_size, uint x_pos, uint y_pos
 
         memcpy(dest, src, img_size.x * 4);
     }
-
-    return;
-}
-//--------------------------------------------//
-
-void set_bg_arr(Uint8* dest, Uint8* src, Vector2u* size){
-
-    assert(dest != NULL);
-    assert(src  != NULL);
-    assert(size != NULL);
-
-    memcpy(dest, src, size->x * size->y * 4);
 
     return;
 }
@@ -249,7 +220,6 @@ void update_pixels(Uint8* dest, Uint8* bg_pixels, Uint8* front_pixels, Vector2u*
 
 //--------------------------------------------//
 
-
 void update_pixels_simd(Uint8* dest, Uint8* bg_pixels, Uint8* front_pixels, Vector2u* size, bool is_overlaying){
 
     assert(dest         != NULL);
@@ -266,108 +236,59 @@ void update_pixels_simd(Uint8* dest, Uint8* bg_pixels, Uint8* front_pixels, Vect
         for(uint x = 0; x < size->x; x+=4){
 
             uint offset = (y * size->x + x) << 2;
-
+            
             // uint8* -> _m128i
             __m128i bg_pixels_low    = _mm_loadu_si128((__m128i*)(bg_pixels + offset));
             __m128i front_pixels_low = _mm_loadu_si128((__m128i*)(front_pixels + offset));
 
+          
             // bg_h = bg_l >> 16
             __m128i bg_pixels_high    = (__m128i)_mm_movehl_ps((__m128)_0, (__m128)bg_pixels_low);
             __m128i front_pixels_high = (__m128i)_mm_movehl_ps((__m128)_0, (__m128)front_pixels_low);
             
             // bytes -> words
-            bg_pixels_low    = _mm_cvtepi8_epi16(bg_pixels_low);
-            front_pixels_low = _mm_cvtepi8_epi16(front_pixels_low);
+            bg_pixels_low    = _mm_cvtepu8_epi16(bg_pixels_low);
+            front_pixels_low = _mm_cvtepu8_epi16(front_pixels_low);
 
-            bg_pixels_high      = _mm_cvtepi8_epi16(bg_pixels_high);
-            front_pixels_high   = _mm_cvtepi8_epi16(front_pixels_high);
+            bg_pixels_high      = _mm_cvtepu8_epi16(bg_pixels_high);
+            front_pixels_high   = _mm_cvtepu8_epi16(front_pixels_high);
 
-            // make [0, a, 0, a, ...]
-            static const __m128i moveA = _mm_set_epi8(Z, meow1, Z, meow1, Z, meow1, Z, meow1,
-                                                  Z, meow2, Z, meow2, Z, meow2, Z, meow2);
-
+            // make [a, 0, a, 0, ...]
+            static const __m128i moveA = _mm_setr_epi8( LOW_A_POS, BIG1, LOW_A_POS, BIG1, LOW_A_POS, BIG1, LOW_A_POS, BIG1,
+                                                        HIGH_A_POS, BIG1, HIGH_A_POS, BIG1, HIGH_A_POS, BIG1, HIGH_A_POS, BIG1);
+            
             __m128i a = _mm_shuffle_epi8 (front_pixels_low,  moveA);
             __m128i A = _mm_shuffle_epi8 (front_pixels_high, moveA);
 
             // a * front + (255 - a) * bg
-            front_pixels_low  = _mm_mullo_epi16(front_pixels_low, a);
-            front_pixels_high = _mm_mullo_epi16(front_pixels_high, a);
             
+            front_pixels_low  = _mm_mullo_epi16(front_pixels_low, a);
+            front_pixels_high = _mm_mullo_epi16(front_pixels_high, A);
+
             bg_pixels_low  = _mm_mullo_epi16(bg_pixels_low, _mm_sub_epi16(_255, a));
             bg_pixels_high = _mm_mullo_epi16(bg_pixels_high, _mm_sub_epi16(_255, A));
-            
+
             __m128i sum = _mm_add_epi16(front_pixels_low, bg_pixels_low); 
             __m128i SUM = _mm_add_epi16(front_pixels_high, bg_pixels_high);
-            
+
             // words -> bytes
 
-            static const __m128i moveSum = _mm_set_epi8 (Z, Z, Z, Z, Z, Z, Z, Z,
-            0x01, 0x03, 0x05, 0x07, 0x09, 0xB, 0xD, 0xF);
+            static const __m128i moveSum = _mm_setr_epi8 (
+                0x01, 0x03, 0x05, 0x07, 0x09, 0xB, 0xD, 0xF,
+                BIG1, BIG1, BIG1, BIG1, BIG1, BIG1, BIG1, BIG1
+            );
 
-            sum = _mm_shuffle_epi8 (sum,  moveA);
-            SUM = _mm_shuffle_epi8 (SUM,  moveA);
-            
+            sum = _mm_shuffle_epi8 (sum,  moveSum);
+            SUM = _mm_shuffle_epi8 (SUM,  moveSum);
+
             // to_color
 
             __m128i color = (__m128i) _mm_movelh_ps((__m128) sum, (__m128) SUM);
 
             _mm_store_si128((__m128i*) (dest + offset), color);
-
-            
         }
     }
 
     return;
 }
 //--------------------------------------------//
-
-/*
-void draw_front_sse(Vertex* pixels, Image* bg_img, Image* front_img, uint x0, uint y0){
-    
-    assert(pixels    != NULL);
-    assert(bg_img    != NULL);
-    assert(front_img != NULL);
-    
-    Vector2u bg_img_size = bg_img->getSize();
-    Vector2u front_img_size = front_img->getSize();
-
-    for(int y = y0; y < front_img_size.y + y0; y++){
-        for(int x = x0; x < front_img_size.x + x0; x+=4){
-
-            uint bg_pixels_arr[4] = {bg_img[x]->GetPixel().toInteger(),
-                                     bg_img[x + 1]->GetPixel().toInteger(),
-                                     bg_img[x + 2]->GetPixel().toInteger(),
-                                     bg_img[x + 3]->GetPixel().toInteger()}
-
-            uint front_pixels_arr[4] = {bg_img[x]->GetPixel().toInteger(),
-                                        bg_img[x + 1]->GetPixel().toInteger(),
-                                        bg_img[x + 2]->GetPixel().toInteger(),
-                                        bg_img[x + 3]->GetPixel().toInteger()}
-
-            __m128i bg_pixels_low    = _mm_loadu_si128((__m128i*)bg_pixels_arr);
-            __m128i front_pixels_low = _mm_loadu_si128((__m128i*)front_pixels_arr);
-
-            __m128i bg_pixels_high    = _mm_srai_epi32(bg_pixels_low, 8*8);
-            __m128i front_pixels_high = _mm_srai_epi32(front_pixels_low, 8*8);
-
-            bg_pixels_low = _mm_cvtepi8_epi16(bg_pixels_low);
-            front_pixels_low = _mm_cvtepi8_epi16(front_pixels_low);
-
-            bg_pixels_high = _mm_cvtepi8_epi16(bg_pixels_high);
-            front_pixels_high = _mm_cvtepi8_epi16(front_pixels_high);
-
-            __m128i moveA = _mm_set_epi8(0x80u, )
-            Color new_pix   = Color(
-                (bg_pix.r * (255 - front_pix.a) + front_pix.r * front_pix.a) >> 8,
-                (bg_pix.b * (255 - front_pix.a) + front_pix.b * front_pix.a) >> 8,
-                (bg_pix.g * (255 - front_pix.a) + front_pix.g * front_pix.a) >> 8);
-
-            pixels[y * bg_img_size.x + x].color = new_pix;
-        }
-    }
-
-    return;
-}
-//--------------------------------------------//
-
-*/
